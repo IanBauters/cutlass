@@ -19,17 +19,30 @@ work in Safari or inside an embedded frame.
 - **Live SVG preview** of the cut, with optional drag-knife corner compensation.
 - **Export** the preview SVG or the path data (`M`/`L`/`Z`, absolute,
   space-separated — the dialect a driver-reuse backend accepts).
-- **Machine panel (experimental).** Connect to the machine over Web Bluetooth,
-  list its GATT services/characteristics, and exchange the plain-text status
-  frames seen in packet captures. This confirms the link.
+- **Machine panel.** Connect to the machine over Web Bluetooth, enumerate its
+  GATT, and exchange the plain-text status frames. **Confirmed working on a
+  Cricut Explore 5** (device `Cricut-A2D7`): the status poll round-trips live.
+
+## Confirmed protocol (Explore 5)
+
+- **Transport:** ISSC/Microchip Transparent UART service
+  `49535343-fe7d-4ae5-8fa9-9fafd205e455`
+  - write (host→machine): `49535343-8841-43f4-a8d4-ecbe34729bb3` (writeNR)
+  - notify (machine→host): `49535343-1e4d-4bd9-ba61-23c647249616`
+  - (`…6daa…` on the same service is a control characteristic, not the data pipe.)
+- **Frame:** `02 01 · seq(2 bytes) · 13 · payload · 00`. A request and its reply
+  share the seq value.
+- **Status handshake (plain text):** host sends payload `92 0d 01`, machine
+  replies `9a 0d 01`. Verified over BLE from the browser.
 
 ## What doesn't work yet
 
-Sending an actual cut. On the captures so far, the Explore 5's BLE link carries
-its cut data encrypted with a **static key** (repeated ciphertext blocks appear
-identically across two separate sessions — the signature of a fixed-key,
-ECB-style scheme, not a per-session handshake). The plain-text housekeeping
-frames go through fine; the encrypted geometry does not, pending that key.
+Sending an actual cut. The status/housekeeping frames are plain text, but the
+**cut geometry is encrypted with a static key** — repeated ciphertext blocks
+appear identically across two separate capture sessions, the signature of a
+fixed-key, ECB-style scheme rather than a per-session handshake. The link and
+the plain-text protocol are solved; driving geometry needs that key, which is
+the circumvention boundary (see below).
 
 ## Layout
 
@@ -51,3 +64,16 @@ product; `core/` is the spec.
 - Reverse engineering for interoperability with your own device. No Cricut code
   or keys are included. Not affiliated with Cricut, Inc.
 - No licence yet — add one before sharing if you intend others to reuse it.
+
+## Routes to actual cutting
+
+Two honest paths, now that the transport is solved:
+
+1. **Driver-reuse (no key-breaking).** Export paths from this app and let
+   Cricut's own installed software do the encryption, as the `slicebug` project
+   does. Sidesteps the key entirely; needs a desktop helper, not just the
+   browser.
+2. **Direct, in the browser.** Would require supplying the static key so the
+   page can encrypt geometry frames itself. That key sits inside Cricut's
+   software; recovering it is the circumvention step, and is out of scope for
+   this repo.
