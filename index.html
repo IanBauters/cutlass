@@ -117,6 +117,7 @@
       <input id="btx" class="u" value="02 01 05 0e 13 92 0d 01 00">
       <div class="btns">
         <button id="bsend" disabled>Send status poll</button>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;color:var(--ink)"><input type="checkbox" id="bbeat" disabled> Heartbeat (2s)</label>
       </div>
       <div class="note">Chrome or Edge only (not Safari). Quit Design Space / disconnect it first — only one app can hold the BLE link. The default frame is the plain-text status query seen in your capture; it confirms the link without touching the encrypted cut data.</div>
     </div>
@@ -293,7 +294,7 @@ const ble={dev:null,server:null,svc:null,wch:null,nch:null};
 function blog(msg){ const el=$("blog"); const t=new Date().toLocaleTimeString(); if(el.textContent.startsWith("BLE traffic")) el.textContent=""; el.textContent+=`${t}  ${msg}\n`; el.scrollTop=el.scrollHeight; }
 function hex(buf){ return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join(" "); }
 function parseHex(s){ const b=(s.match(/[0-9a-fA-F]{2}/g)||[]).map(x=>parseInt(x,16)); return new Uint8Array(b); }
-function bstate(connected,msg){ $("bstat").textContent=msg; $("bdot").style.background=connected?"#34c759":"#c7c7cc"; $("bconn").disabled=connected; $("bdisc").disabled=!connected; $("bsend").disabled=!connected||!ble.wch; }
+function bstate(connected,msg){ $("bstat").textContent=msg; $("bdot").style.background=connected?"#34c759":"#c7c7cc"; $("bconn").disabled=connected; $("bdisc").disabled=!connected; $("bsend").disabled=!connected||!ble.wch; $("bbeat").disabled=!connected||!ble.wch; if(!connected){ $("bbeat").checked=false; if(ble.beat){ clearInterval(ble.beat); ble.beat=null; } } }
 function charTags(p){ return [p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read",p.indicate&&"indicate"].filter(Boolean).join(","); }
 
 async function bconnect(){
@@ -340,6 +341,7 @@ async function bsend(){
 $("bconn").onclick=bconnect;
 $("bdisc").onclick=()=>{ try{ ble.dev&&ble.dev.gatt.connected&&ble.dev.gatt.disconnect(); }catch(e){} ble.wch=ble.nch=ble.svc=null; bstate(false,"Not connected"); };
 $("bsend").onclick=bsend;
+$("bbeat").onchange=()=>{ if($("bbeat").checked){ ble.beat=setInterval(bsend,2000); blog("Heartbeat on (status poll every 2s)."); } else if(ble.beat){ clearInterval(ble.beat); ble.beat=null; blog("Heartbeat off."); } };
 $("selw").onchange=()=>{ ble.wch=ble.wlist[+$("selw").value]; blog("Write → "+ble.wch.uuid); };
 $("seln").onchange=()=>useNotify();
 if(!("bluetooth" in navigator)) $("bstat").textContent="Web Bluetooth N/A here";
