@@ -104,12 +104,14 @@
         <button class="primary" id="bconn">Connect…</button>
         <button id="bdisc" disabled>Disconnect</button>
       </div>
-      <details>
-        <summary>GATT UUIDs (auto-tries Nordic UART; paste yours if needed)</summary>
-        <label>Service</label><input id="usvc" class="u" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e">
-        <label>Write characteristic (blank = auto)</label><input id="uwr" class="u" placeholder="auto-detect">
-        <label>Notify characteristic (blank = auto)</label><input id="unt" class="u" placeholder="auto-detect">
-        <button id="bdiscover" disabled style="margin-top:8px">List services &amp; characteristics</button>
+      <details open>
+        <summary>GATT UUIDs (Explore 5 values pre-filled)</summary>
+        <label>Candidate services — one per line, pipe auto-detected</label>
+        <textarea id="usvcs" spellcheck="false" style="height:84px">49535343-fe7d-4ae5-8fa9-9fafd205e455
+00000100-4202-d1b9-ee11-17877004be93
+00010203-0405-0607-0809-0a0b0c0d1912</textarea>
+        <label>Force write characteristic (optional)</label><input id="uwr" class="u" placeholder="auto-detect">
+        <label>Force notify characteristic (optional)</label><input id="unt" class="u" placeholder="auto-detect">
       </details>
       <label>Send raw frame (hex)</label>
       <input id="btx" class="u" value="02 01 05 0e 13 92 0d 01 00">
@@ -291,33 +293,39 @@ const ble={dev:null,server:null,svc:null,wch:null,nch:null};
 function blog(msg){ const el=$("blog"); const t=new Date().toLocaleTimeString(); if(el.textContent.startsWith("BLE traffic")) el.textContent=""; el.textContent+=`${t}  ${msg}\n`; el.scrollTop=el.scrollHeight; }
 function hex(buf){ return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join(" "); }
 function parseHex(s){ const b=(s.match(/[0-9a-fA-F]{2}/g)||[]).map(x=>parseInt(x,16)); return new Uint8Array(b); }
-function bstate(connected,msg){ $("bstat").textContent=msg; $("bdot").style.background=connected?"#34c759":"#c7c7cc"; $("bconn").disabled=connected; $("bdisc").disabled=!connected; $("bsend").disabled=!connected||!ble.wch; $("bdiscover").disabled=!connected; }
+function bstate(connected,msg){ $("bstat").textContent=msg; $("bdot").style.background=connected?"#34c759":"#c7c7cc"; $("bconn").disabled=connected; $("bdisc").disabled=!connected; $("bsend").disabled=!connected||!ble.wch; }
+function charTags(p){ return [p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read",p.indicate&&"indicate"].filter(Boolean).join(","); }
 
 async function bconnect(){
-  if(!("bluetooth" in navigator)){ blog("Web Bluetooth isn't available here. Open this artifact in its own Chrome/Edge tab (not Safari, and not inside an iframe that blocks Bluetooth)."); return; }
-  const su=($("usvc").value.trim()||"").toLowerCase();
+  if(!("bluetooth" in navigator)){ blog("Web Bluetooth isn't available here. Open the GitHub Pages URL in its own Chrome/Edge tab (not Safari, not an embedded frame)."); return; }
+  const list=($("usvcs").value.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g)||[]).map(s=>s.toLowerCase());
+  if(!list.length){ blog("Add at least one service UUID."); return; }
+  const wu=$("uwr").value.trim().toLowerCase(), nu=$("unt").value.trim().toLowerCase();
   try{
     blog("Requesting device… (pick your Explore 5 in the chooser)");
-    const opts={acceptAllDevices:true, optionalServices: su?[su]:[]};
-    ble.dev=await navigator.bluetooth.requestDevice(opts);
+    ble.dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:list});
     ble.dev.addEventListener("gattserverdisconnected",()=>{ bstate(false,"Disconnected"); blog("Device disconnected."); });
-    blog("Connecting to GATT server on \""+(ble.dev.name||"unnamed")+"\"…");
+    blog("Connecting to GATT on \""+(ble.dev.name||"unnamed")+"\"…");
     ble.server=await ble.dev.gatt.connect();
-    let service=null;
-    try{ service=await ble.server.getPrimaryService(su); }
-    catch(e){ blog("Service "+su+" not found. Click \"List services\" to see what's available, or paste the right UUID."); bstate(true,"Connected (no service)"); return; }
-    ble.svc=service;
-    const chars=await service.getCharacteristics();
-    blog("Service "+su+" has "+chars.length+" characteristic(s).");
-    const wu=$("uwr").value.trim().toLowerCase(), nu=$("unt").value.trim().toLowerCase();
-    for(const c of chars){
-      const p=c.properties; const tag=[p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read",p.indicate&&"indicate"].filter(Boolean).join(",");
-      blog("  "+c.uuid+"  ["+tag+"]");
-      if(wu? c.uuid===wu : (p.write||p.writeWithoutResponse)) if(!ble.wch) ble.wch=c;
-      if(nu? c.uuid===nu : (p.notify||p.indicate)) if(!ble.nch) ble.nch=c;
+    let picked=null;
+    for(const su of list){
+      let svc; try{ svc=await ble.server.getPrimaryService(su); }
+      catch(e){ blog("  service "+su.slice(0,8)+"… not present"); continue; }
+      const chars=await svc.getCharacteristics();
+      blog("service "+su);
+      let w=null,n=null;
+      for(const c of chars){ const p=c.properties; blog("   • "+c.uuid+"  ["+charTags(p)+"]");
+        if(wu? c.uuid===wu : (p.write||p.writeWithoutResponse)){ if(!w)w=c; }
+        if(nu? c.uuid===nu : (p.notify||p.indicate)){ if(!n)n=c; } }
+      if(!picked && w && n) picked={svc,w,n,su};
     }
-    if(ble.nch){ await ble.nch.startNotifications(); ble.nch.addEventListener("characteristicvaluechanged",e=>blog("◀ RX  "+hex(e.target.value.buffer))); blog("Subscribed to notifications on "+ble.nch.uuid); }
-    if(ble.wch) blog("Write characteristic: "+ble.wch.uuid);
+    if(!picked){ blog("Connected, but no service had both a write and a notify characteristic. Tell me the characteristic list above and we'll pick manually."); bstate(true,"Connected (no pipe)"); return; }
+    ble.svc=picked.svc; ble.wch=picked.w; ble.nch=picked.n;
+    await ble.nch.startNotifications();
+    ble.nch.addEventListener("characteristicvaluechanged",e=>blog("◀ RX  "+hex(e.target.value.buffer)));
+    blog("✓ pipe on service "+picked.su);
+    blog("   write  "+ble.wch.uuid+"  ["+charTags(ble.wch.properties)+"]");
+    blog("   notify "+ble.nch.uuid+"  (subscribed)");
     bstate(true,"Connected");
   }catch(e){ blog("Error: "+(e.message||e)); if(!ble.server||!ble.server.connected) bstate(false,"Not connected"); }
 }
@@ -330,18 +338,9 @@ async function bsend(){
     blog("▶ TX  "+hex(data.buffer));
   }catch(e){ blog("Send failed: "+(e.message||e)); }
 }
-async function bdiscover(){
-  if(!ble.server){ blog("Connect first."); return; }
-  try{ const svcs=await ble.server.getPrimaryServices();
-    blog("Granted services ("+svcs.length+"):");
-    for(const s of svcs){ blog("• "+s.uuid); const cs=await s.getCharacteristics(); for(const c of cs){ const p=c.properties; blog("    "+c.uuid+"  ["+[p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read"].filter(Boolean).join(",")+"]"); } }
-    blog("(Web Bluetooth only shows services you listed under the Service field before connecting.)");
-  }catch(e){ blog("Discover error: "+(e.message||e)); }
-}
 $("bconn").onclick=bconnect;
 $("bdisc").onclick=()=>{ try{ ble.dev&&ble.dev.gatt.connected&&ble.dev.gatt.disconnect(); }catch(e){} ble.wch=ble.nch=ble.svc=null; bstate(false,"Not connected"); };
 $("bsend").onclick=bsend;
-$("bdiscover").onclick=bdiscover;
 if(!("bluetooth" in navigator)) $("bstat").textContent="Web Bluetooth N/A here";
 
 // start with the example loaded so there's something to see
