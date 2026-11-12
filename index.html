@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cutlass — G-code to Cricut cut paths</title>
+<style>
+  :root{
+    --bg:#f5f5f7; --panel:#ffffff; --ink:#1d1d1f; --sub:#6e6e73;
+    --line:#d2d2d7; --accent:#c0392b; --accent2:#0071e3; --radius:12px;
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-size:14px;line-height:1.45}
+  header{padding:18px 22px;border-bottom:1px solid var(--line);background:var(--panel);
+    display:flex;align-items:baseline;gap:12px}
+  header h1{font-size:17px;margin:0;font-weight:600}
+  header .tag{color:var(--sub);font-size:12px}
+  main{display:grid;grid-template-columns:320px 1fr;gap:0;height:calc(100vh - 59px)}
+  .side{border-right:1px solid var(--line);background:var(--panel);overflow:auto;padding:18px}
+  .view{overflow:auto;padding:18px;display:flex;flex-direction:column;gap:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--sub);margin:0 0 10px}
+  label{display:block;font-size:12px;color:var(--sub);margin:10px 0 3px}
+  input[type=range]{width:100%}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .val{font-variant-numeric:tabular-nums;color:var(--ink);font-size:12px}
+  button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);
+    padding:7px 12px;border-radius:8px;cursor:pointer}
+  button:hover{background:#f0f0f2}
+  button.primary{background:var(--accent2);color:#fff;border-color:var(--accent2)}
+  button.primary:hover{filter:brightness(1.05)}
+  .drop{border:1.5px dashed var(--line);border-radius:var(--radius);padding:20px;text-align:center;
+    color:var(--sub);cursor:pointer;transition:.15s}
+  .drop.hot{border-color:var(--accent2);background:#f0f7ff;color:var(--accent2)}
+  textarea{width:100%;height:150px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+    border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical;background:#fcfcfd}
+  .preview{flex:1;min-height:300px;display:flex;align-items:center;justify-content:center;background:
+    repeating-conic-gradient(#f0f0f2 0% 25%, #fafafa 0% 50%) 50%/18px 18px;border:1px solid var(--line);
+    border-radius:var(--radius);overflow:auto}
+  .preview svg{max-width:96%;max-height:96%}
+  pre{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;white-space:pre-wrap;
+    word-break:break-all;max-height:160px;overflow:auto;background:#fcfcfd;border:1px solid var(--line);
+    border-radius:8px;padding:10px}
+  .stat{display:flex;gap:16px;flex-wrap:wrap;color:var(--sub);font-size:12px}
+  .stat b{color:var(--ink);font-weight:600}
+  .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .note{font-size:11.5px;color:var(--sub);margin-top:8px}
+  .err{color:var(--accent);font-size:12px;margin-top:8px;white-space:pre-wrap}
+  details{margin-top:12px}
+  summary{cursor:pointer;color:var(--accent2);font-size:12px}
+  input.u{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    border:1px solid var(--line);border-radius:6px;padding:6px;background:#fcfcfd}
+  button:disabled{opacity:.45;cursor:not-allowed}
+</style>
+</head>
+<body>
+<header>
+  <h1>Cutlass</h1>
+  <span class="tag">G-code → Cricut-style cut paths · runs entirely in your browser</span>
+</header>
+<main>
+  <div class="side">
+    <div class="card">
+      <h2>Input</h2>
+      <div id="drop" class="drop">Drop a .gcode file here<br>or click to choose</div>
+      <input id="file" type="file" accept=".gcode,.nc,.gc,.txt,.ngc" hidden>
+      <div class="btns">
+        <button id="example">Load example square</button>
+        <button id="exCircle">Example circle</button>
+      </div>
+      <label>…or paste G-code</label>
+      <textarea id="src" spellcheck="false" placeholder="G21&#10;G90&#10;G0 X10 Y10&#10;G1 Z-1&#10;G1 X30 Y10 …"></textarea>
+    </div>
+
+    <div class="card">
+      <h2>Settings</h2>
+      <div class="row"><label style="margin:0">Blade offset (drag knife)</label><span class="val" id="offV">0.50 mm</span></div>
+      <input id="off" type="range" min="0" max="2" step="0.05" value="0.5">
+      <div class="row"><label style="margin:0">Arc smoothness (segment)</label><span class="val" id="segV">0.25 mm</span></div>
+      <input id="seg" type="range" min="0.1" max="2" step="0.05" value="0.25">
+      <div class="row"><label style="margin:0">Z tool-down at ≤</label><span class="val" id="zV">0.00 mm</span></div>
+      <input id="z" type="range" min="-2" max="2" step="0.1" value="0">
+      <div class="note">Z≤ threshold decides tool-down for files that plunge with Z. Files using M3/M5 work regardless.</div>
+    </div>
+
+    <div class="card">
+      <h2>Export</h2>
+      <div class="btns">
+        <button class="primary" id="dlsvg">Download preview SVG</button>
+        <button id="dlpath">Download path data</button>
+        <button id="copy">Copy path data</button>
+      </div>
+      <div class="note">Path output is the M/L/Z dialect a driver-reuse backend accepts (absolute, space-separated).</div>
+    </div>
+
+    <div class="card">
+      <h2>Machine (experimental)</h2>
+      <div class="row" style="margin-bottom:8px">
+        <span class="val" id="bstat" style="color:var(--sub)">Not connected</span>
+        <span id="bdot" style="width:9px;height:9px;border-radius:50%;background:#c7c7cc;display:inline-block"></span>
+      </div>
+      <div class="btns">
+        <button class="primary" id="bconn">Connect…</button>
+        <button id="bdisc" disabled>Disconnect</button>
+      </div>
+      <details>
+        <summary>GATT UUIDs (auto-tries Nordic UART; paste yours if needed)</summary>
+        <label>Service</label><input id="usvc" class="u" value="6e400001-b5a3-f393-e0a9-e50e24dcca9e">
+        <label>Write characteristic (blank = auto)</label><input id="uwr" class="u" placeholder="auto-detect">
+        <label>Notify characteristic (blank = auto)</label><input id="unt" class="u" placeholder="auto-detect">
+        <button id="bdiscover" disabled style="margin-top:8px">List services &amp; characteristics</button>
+      </details>
+      <label>Send raw frame (hex)</label>
+      <input id="btx" class="u" value="02 01 05 0e 13 92 0d 01 00">
+      <div class="btns">
+        <button id="bsend" disabled>Send status poll</button>
+      </div>
+      <div class="note">Chrome or Edge only (not Safari). Quit Design Space / disconnect it first — only one app can hold the BLE link. The default frame is the plain-text status query seen in your capture; it confirms the link without touching the encrypted cut data.</div>
+    </div>
+  </div>
+
+  <div class="view">
+    <div class="preview"><svg id="svg" viewBox="0 0 100 100"></svg></div>
+    <div class="card">
+      <div class="stat" id="stat">Load or paste some G-code to begin.</div>
+      <div class="err" id="err"></div>
+      <details open><summary>Path data</summary><pre id="out"></pre></details>
+    </div>
+    <div class="card">
+      <h2>Machine log</h2>
+      <pre id="blog" style="max-height:220px">BLE traffic appears here once you connect.</pre>
+    </div>
+  </div>
+</main>
+
+<script>
+const MM=25.4;
+function stripComments(line){ line=line.replace(/\(.*?\)/g," "); const s=line.indexOf(";"); return s>=0?line.slice(0,s):line; }
+const WORD=/([A-Za-z])\s*([-+]?[0-9]*\.?[0-9]+)/g;
+
+function parse(text, zDown=0){
+  let x=0,y=0,z=0,abs=true,u=1,toolDown=false,feed=null,lastMotion=1;
+  const moves=[];
+  const lines=text.split(/\r?\n/);
+  for(let ln=0; ln<lines.length; ln++){
+    const line=stripComments(lines[ln]).trim(); if(!line) continue;
+    const ax={}; const g=[]; let m;
+    WORD.lastIndex=0;
+    while((m=WORD.exec(line))){
+      const L=m[1].toUpperCase(), v=parseFloat(m[2]);
+      if(L==="G") g.push(Math.round(v));
+      else if(L==="M"){ const mm=Math.round(v); if(mm===3||mm===4)toolDown=true; else if(mm===5)toolDown=false; }
+      else if(L==="F") feed=v*u;
+      else if("XYZIJ".includes(L)) ax[L]=v;
+    }
+    for(const gc of g){ if(gc===20)u=MM; else if(gc===21)u=1; else if(gc===90)abs=true; else if(gc===91)abs=false; }
+    let motion=g.find(c=>c===0||c===1||c===2||c===3);
+    if(motion===undefined && Object.keys(ax).length===0) continue;
+    if(motion===undefined) motion=lastMotion;
+    lastMotion=motion;
+    const px=x,py=y;
+    const res=(k,base)=>{ if(!(k in ax))return base; const vv=ax[k]*u; return abs?vv:base+vv; };
+    const nx=res("X",x), ny=res("Y",y);
+    if("Z" in ax){ const zv=ax.Z*u; z=abs?zv:z+zv; }
+    const down = toolDown || (z <= zDown*u);
+    const kind = motion===0 ? "travel" : (down?"cut":"travel");
+    if(motion===2||motion===3){
+      if(!("I" in ax)&&!("J" in ax)) throw new Error("line "+(ln+1)+": arc (G2/G3) needs I and/or J");
+      const i=(ax.I||0)*u, j=(ax.J||0)*u;
+      moves.push({kind,x:nx,y:ny,arc:{cx:px+i,cy:py+j,cw:motion===2},feed});
+    } else {
+      moves.push({kind,x:nx,y:ny,arc:null,feed});
+    }
+    x=nx; y=ny;
+  }
+  return moves;
+}
+
+function tessellate(s,e,cx,cy,cw,maxSeg){
+  const [sx,sy]=s,[ex,ey]=e;
+  const r=Math.hypot(sx-cx,sy-cy); if(r<1e-9) return [e];
+  let a0=Math.atan2(sy-cy,sx-cx), a1=Math.atan2(ey-cy,ex-cx), sweep=a1-a0;
+  if(cw){ while(sweep>=0)sweep-=2*Math.PI; } else { while(sweep<=0)sweep+=2*Math.PI; }
+  const steps=Math.max(1,Math.ceil(Math.abs(sweep)*r/maxSeg)); const pts=[];
+  for(let k=1;k<=steps;k++){ const a=a0+sweep*(k/steps); pts.push([cx+r*Math.cos(a),cy+r*Math.sin(a)]); }
+  pts[pts.length-1]=e; return pts;
+}
+
+function buildSubpaths(moves,maxSeg=0.25){
+  const subs=[]; let cur=null, pos=[0,0];
+  const add=(p)=>{ if(cur.length && Math.hypot(p[0]-cur[cur.length-1][0],p[1]-cur[cur.length-1][1])<1e-9) return; cur.push(p); };
+  for(const mv of moves){
+    if(mv.kind==="travel"){ if(cur&&cur.length>=2)subs.push(cur); cur=null; pos=[mv.x,mv.y]; continue; }
+    if(cur===null) cur=[pos];
+    if(mv.arc){ for(const p of tessellate(pos,[mv.x,mv.y],mv.arc.cx,mv.arc.cy,mv.arc.cw,maxSeg)) add(p); }
+    else add([mv.x,mv.y]);
+    pos=[mv.x,mv.y];
+  }
+  if(cur&&cur.length>=2)subs.push(cur);
+  return subs;
+}
+function closed(pts){ if(pts.length<3)return false; return Math.hypot(pts[0][0]-pts[pts.length-1][0],pts[0][1]-pts[pts.length-1][1])<1e-6; }
+
+function unit(dx,dy){ const d=Math.hypot(dx,dy); return d<1e-12?[0,0]:[dx/d,dy/d]; }
+function turnAngle(a,b){ let dot=Math.max(-1,Math.min(1,a[0]*b[0]+a[1]*b[1])); let ang=Math.acos(dot); const cr=a[0]*b[1]-a[1]*b[0]; return cr>=0?ang:-ang; }
+function applyOffset(pts,offset,thresholdDeg=20,swivel=4){
+  if(offset<=0||pts.length<3) return pts;
+  const thr=thresholdDeg*Math.PI/180; const out=[pts[0]];
+  for(let i=1;i<pts.length-1;i++){
+    const [px,py]=pts[i-1],[cx,cy]=pts[i],[nx,ny]=pts[i+1];
+    const din=unit(cx-px,cy-py), dout=unit(nx-cx,ny-cy);
+    if((din[0]===0&&din[1]===0)||(dout[0]===0&&dout[1]===0)){ out.push([cx,cy]); continue; }
+    const t=turnAngle(din,dout);
+    if(Math.abs(t)<thr){ out.push([cx,cy]); continue; }
+    out.push([cx+din[0]*offset,cy+din[1]*offset]);
+    const base=Math.atan2(din[1],din[0]);
+    for(let s=1;s<=swivel;s++){ const a=base+t*(s/swivel); out.push([cx+Math.cos(a)*offset,cy+Math.sin(a)*offset]); }
+    out.push([cx,cy]);
+  }
+  out.push(pts[pts.length-1]);
+  return out;
+}
+
+const fmt=(v)=>{ let s=v.toFixed(4).replace(/0+$/,"").replace(/\.$/,""); return (s===""||s==="-0")?"0":s; };
+function toPathData(subs){
+  const out=[];
+  for(const pts of subs){ if(pts.length<2)continue; const t=[]; pts.forEach((p,i)=>t.push((i?"L":"M")+" "+fmt(p[0])+" "+fmt(p[1]))); if(closed(pts))t.push("Z"); out.push(t.join(" ")); }
+  return out;
+}
+function bounds(subs){ const xs=[],ys=[]; subs.forEach(s=>s.forEach(p=>{xs.push(p[0]);ys.push(p[1]);})); if(!xs.length)return[0,0,0,0]; return [Math.min(...xs),Math.min(...ys),Math.max(...xs),Math.max(...ys)]; }
+
+// ---- UI ----
+const $=id=>document.getElementById(id);
+let currentSubs=[], currentSvg="";
+
+function render(){
+  $("err").textContent="";
+  const text=$("src").value;
+  if(!text.trim()){ $("svg").innerHTML=""; $("out").textContent=""; $("stat").textContent="Load or paste some G-code to begin."; return; }
+  const off=parseFloat($("off").value), seg=parseFloat($("seg").value), zd=parseFloat($("z").value);
+  let subs;
+  try{ subs=buildSubpaths(parse(text,zd),seg); }
+  catch(e){ $("err").textContent=e.message; return; }
+  if(off>0) subs=subs.map(s=>applyOffset(s,off));
+  currentSubs=subs;
+  const [minx,miny,maxx,maxy]=bounds(subs); const margin=5;
+  const w=(maxx-minx)+2*margin, h=(maxy-miny)+2*margin;
+  const tx=x=>x-minx+margin, ty=y=>(maxy-y)+margin;
+  let paths="";
+  for(const pts of subs){ if(pts.length<2)continue; let d=""; pts.forEach((p,i)=>d+=(i?"L":"M")+" "+tx(p[0]).toFixed(3)+" "+ty(p[1]).toFixed(3)+" "); if(closed(pts))d+="Z"; paths+=`<path d="${d}" fill="none" stroke="#c0392b" stroke-width="0.3"/>`; }
+  const svg=$("svg"); svg.setAttribute("viewBox",`0 0 ${w.toFixed(3)} ${h.toFixed(3)}`);
+  svg.innerHTML=`<rect width="${w.toFixed(3)}" height="${h.toFixed(3)}" fill="#ffffff"/>${paths}`;
+  currentSvg=`<svg xmlns="http://www.w3.org/2000/svg" width="${w.toFixed(2)}mm" height="${h.toFixed(2)}mm" viewBox="0 0 ${w.toFixed(3)} ${h.toFixed(3)}"><rect width="${w.toFixed(3)}" height="${h.toFixed(3)}" fill="#fff"/>${paths}</svg>`;
+  const pathData=toPathData(subs);
+  $("out").textContent=pathData.join("\n");
+  const npts=subs.reduce((a,s)=>a+s.length,0);
+  $("stat").innerHTML=`<span><b>${subs.length}</b> subpath${subs.length!==1?"s":""}</span><span><b>${npts}</b> points</span><span>extent <b>${(maxx-minx).toFixed(1)} × ${(maxy-miny).toFixed(1)}</b> mm</span>`;
+}
+
+let _dl=null, _dlTried=false;
+async function getDownloads(){ if(_dlTried) return _dl; _dlTried=true; try{ if(window.claude&&claude.use) _dl=await claude.use("downloads"); }catch(e){ _dl=null; } return _dl; }
+async function download(name,text,type="text/plain"){
+  const d=await getDownloads();
+  if(d){ try{ await d.save({filename:name,data:text}); return; }catch(e){ /* viewer declined or failed; fall through */ } }
+  // Fallback for opening the file locally (file:// or a normal browser tab)
+  try{ const b=new Blob([text],{type}); const u=URL.createObjectURL(b); const a=document.createElement("a"); a.href=u; a.download=name; a.click(); URL.revokeObjectURL(u); }
+  catch(e){ alert("Couldn't save automatically. Select the path text and copy it instead."); }
+}
+
+const EX_SQUARE=`; 20 mm square, Z controls the blade\nG21\nG90\nG0 Z5\nG0 X10 Y10\nG1 Z-1 F1000\nG1 X30 Y10\nG1 X30 Y30\nG1 X10 Y30\nG1 X10 Y10\nG0 Z5\n`;
+const EX_CIRCLE=`; 20 mm circle via M3/M5 and two arcs\nG21\nG90\nM5\nG0 X10 Y20\nM3\nG2 X30 Y20 I10 J0\nG2 X10 Y20 I-10 J0\nM5\n`;
+
+["off","seg","z"].forEach(id=>$(id).addEventListener("input",()=>{ $("offV").textContent=parseFloat($("off").value).toFixed(2)+" mm"; $("segV").textContent=parseFloat($("seg").value).toFixed(2)+" mm"; $("zV").textContent=parseFloat($("z").value).toFixed(2)+" mm"; render(); }));
+$("src").addEventListener("input",render);
+$("example").onclick=()=>{ $("src").value=EX_SQUARE; render(); };
+$("exCircle").onclick=()=>{ $("src").value=EX_CIRCLE; render(); };
+$("dlsvg").onclick=()=>{ if(currentSvg) download("cut-preview.svg",currentSvg,"image/svg+xml"); };
+$("dlpath").onclick=()=>{ download("paths.txt",toPathData(currentSubs).join("\n")); };
+$("copy").onclick=async()=>{ try{ await navigator.clipboard.writeText(toPathData(currentSubs).join("\n")); $("copy").textContent="Copied"; setTimeout(()=>$("copy").textContent="Copy path data",1200);}catch(e){} };
+
+const drop=$("drop"), file=$("file");
+drop.onclick=()=>file.click();
+file.onchange=e=>{ const f=e.target.files[0]; if(f) f.text().then(t=>{ $("src").value=t; render(); }); };
+["dragover","dragenter"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add("hot");}));
+["dragleave","drop"].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove("hot");}));
+drop.addEventListener("drop",e=>{ const f=e.dataTransfer.files[0]; if(f) f.text().then(t=>{ $("src").value=t; render(); }); });
+
+// ---- Machine (Web Bluetooth) ----
+const ble={dev:null,server:null,svc:null,wch:null,nch:null};
+function blog(msg){ const el=$("blog"); const t=new Date().toLocaleTimeString(); if(el.textContent.startsWith("BLE traffic")) el.textContent=""; el.textContent+=`${t}  ${msg}\n`; el.scrollTop=el.scrollHeight; }
+function hex(buf){ return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join(" "); }
+function parseHex(s){ const b=(s.match(/[0-9a-fA-F]{2}/g)||[]).map(x=>parseInt(x,16)); return new Uint8Array(b); }
+function bstate(connected,msg){ $("bstat").textContent=msg; $("bdot").style.background=connected?"#34c759":"#c7c7cc"; $("bconn").disabled=connected; $("bdisc").disabled=!connected; $("bsend").disabled=!connected||!ble.wch; $("bdiscover").disabled=!connected; }
+
+async function bconnect(){
+  if(!("bluetooth" in navigator)){ blog("Web Bluetooth isn't available here. Open this artifact in its own Chrome/Edge tab (not Safari, and not inside an iframe that blocks Bluetooth)."); return; }
+  const su=($("usvc").value.trim()||"").toLowerCase();
+  try{
+    blog("Requesting device… (pick your Explore 5 in the chooser)");
+    const opts={acceptAllDevices:true, optionalServices: su?[su]:[]};
+    ble.dev=await navigator.bluetooth.requestDevice(opts);
+    ble.dev.addEventListener("gattserverdisconnected",()=>{ bstate(false,"Disconnected"); blog("Device disconnected."); });
+    blog("Connecting to GATT server on \""+(ble.dev.name||"unnamed")+"\"…");
+    ble.server=await ble.dev.gatt.connect();
+    let service=null;
+    try{ service=await ble.server.getPrimaryService(su); }
+    catch(e){ blog("Service "+su+" not found. Click \"List services\" to see what's available, or paste the right UUID."); bstate(true,"Connected (no service)"); return; }
+    ble.svc=service;
+    const chars=await service.getCharacteristics();
+    blog("Service "+su+" has "+chars.length+" characteristic(s).");
+    const wu=$("uwr").value.trim().toLowerCase(), nu=$("unt").value.trim().toLowerCase();
+    for(const c of chars){
+      const p=c.properties; const tag=[p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read",p.indicate&&"indicate"].filter(Boolean).join(",");
+      blog("  "+c.uuid+"  ["+tag+"]");
+      if(wu? c.uuid===wu : (p.write||p.writeWithoutResponse)) if(!ble.wch) ble.wch=c;
+      if(nu? c.uuid===nu : (p.notify||p.indicate)) if(!ble.nch) ble.nch=c;
+    }
+    if(ble.nch){ await ble.nch.startNotifications(); ble.nch.addEventListener("characteristicvaluechanged",e=>blog("◀ RX  "+hex(e.target.value.buffer))); blog("Subscribed to notifications on "+ble.nch.uuid); }
+    if(ble.wch) blog("Write characteristic: "+ble.wch.uuid);
+    bstate(true,"Connected");
+  }catch(e){ blog("Error: "+(e.message||e)); if(!ble.server||!ble.server.connected) bstate(false,"Not connected"); }
+}
+async function bsend(){
+  if(!ble.wch){ blog("No write characteristic."); return; }
+  const data=parseHex($("btx").value); if(!data.length){ blog("Nothing to send."); return; }
+  try{
+    if(ble.wch.properties.writeWithoutResponse) await ble.wch.writeValueWithoutResponse(data);
+    else await ble.wch.writeValue(data);
+    blog("▶ TX  "+hex(data.buffer));
+  }catch(e){ blog("Send failed: "+(e.message||e)); }
+}
+async function bdiscover(){
+  if(!ble.server){ blog("Connect first."); return; }
+  try{ const svcs=await ble.server.getPrimaryServices();
+    blog("Granted services ("+svcs.length+"):");
+    for(const s of svcs){ blog("• "+s.uuid); const cs=await s.getCharacteristics(); for(const c of cs){ const p=c.properties; blog("    "+c.uuid+"  ["+[p.write&&"write",p.writeWithoutResponse&&"writeNR",p.notify&&"notify",p.read&&"read"].filter(Boolean).join(",")+"]"); } }
+    blog("(Web Bluetooth only shows services you listed under the Service field before connecting.)");
+  }catch(e){ blog("Discover error: "+(e.message||e)); }
+}
+$("bconn").onclick=bconnect;
+$("bdisc").onclick=()=>{ try{ ble.dev&&ble.dev.gatt.connected&&ble.dev.gatt.disconnect(); }catch(e){} ble.wch=ble.nch=ble.svc=null; bstate(false,"Not connected"); };
+$("bsend").onclick=bsend;
+$("bdiscover").onclick=bdiscover;
+if(!("bluetooth" in navigator)) $("bstat").textContent="Web Bluetooth N/A here";
+
+// start with the example loaded so there's something to see
+$("src").value=EX_SQUARE; render();
+</script>
+</body>
+</html>
