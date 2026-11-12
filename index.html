@@ -49,7 +49,7 @@
   .err{color:var(--accent);font-size:12px;margin-top:8px;white-space:pre-wrap}
   details{margin-top:12px}
   summary{cursor:pointer;color:var(--accent2);font-size:12px}
-  input.u{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+  input.u,select.u{width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
     border:1px solid var(--line);border-radius:6px;padding:6px;background:#fcfcfd}
   button:disabled{opacity:.45;cursor:not-allowed}
 </style>
@@ -110,8 +110,8 @@
         <textarea id="usvcs" spellcheck="false" style="height:84px">49535343-fe7d-4ae5-8fa9-9fafd205e455
 00000100-4202-d1b9-ee11-17877004be93
 00010203-0405-0607-0809-0a0b0c0d1912</textarea>
-        <label>Force write characteristic (optional)</label><input id="uwr" class="u" placeholder="auto-detect">
-        <label>Force notify characteristic (optional)</label><input id="unt" class="u" placeholder="auto-detect">
+        <label>Write characteristic (pick the pipe to test)</label><select id="selw" class="u"></select>
+        <label>Notify characteristic</label><select id="seln" class="u"></select>
       </details>
       <label>Send raw frame (hex)</label>
       <input id="btx" class="u" value="02 01 05 0e 13 92 0d 01 00">
@@ -300,35 +300,34 @@ async function bconnect(){
   if(!("bluetooth" in navigator)){ blog("Web Bluetooth isn't available here. Open the GitHub Pages URL in its own Chrome/Edge tab (not Safari, not an embedded frame)."); return; }
   const list=($("usvcs").value.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/g)||[]).map(s=>s.toLowerCase());
   if(!list.length){ blog("Add at least one service UUID."); return; }
-  const wu=$("uwr").value.trim().toLowerCase(), nu=$("unt").value.trim().toLowerCase();
   try{
     blog("Requesting device… (pick your Explore 5 in the chooser)");
     ble.dev=await navigator.bluetooth.requestDevice({acceptAllDevices:true, optionalServices:list});
     ble.dev.addEventListener("gattserverdisconnected",()=>{ bstate(false,"Disconnected"); blog("Device disconnected."); });
     blog("Connecting to GATT on \""+(ble.dev.name||"unnamed")+"\"…");
     ble.server=await ble.dev.gatt.connect();
-    let picked=null;
+    ble.wlist=[]; ble.nlist=[];
     for(const su of list){
       let svc; try{ svc=await ble.server.getPrimaryService(su); }
       catch(e){ blog("  service "+su.slice(0,8)+"… not present"); continue; }
       const chars=await svc.getCharacteristics();
       blog("service "+su);
-      let w=null,n=null;
       for(const c of chars){ const p=c.properties; blog("   • "+c.uuid+"  ["+charTags(p)+"]");
-        if(wu? c.uuid===wu : (p.write||p.writeWithoutResponse)){ if(!w)w=c; }
-        if(nu? c.uuid===nu : (p.notify||p.indicate)){ if(!n)n=c; } }
-      if(!picked && w && n) picked={svc,w,n,su};
+        if(p.write||p.writeWithoutResponse) ble.wlist.push(c);
+        if(p.notify||p.indicate) ble.nlist.push(c); }
     }
-    if(!picked){ blog("Connected, but no service had both a write and a notify characteristic. Tell me the characteristic list above and we'll pick manually."); bstate(true,"Connected (no pipe)"); return; }
-    ble.svc=picked.svc; ble.wch=picked.w; ble.nch=picked.n;
-    await ble.nch.startNotifications();
-    ble.nch.addEventListener("characteristicvaluechanged",e=>blog("◀ RX  "+hex(e.target.value.buffer)));
-    blog("✓ pipe on service "+picked.su);
-    blog("   write  "+ble.wch.uuid+"  ["+charTags(ble.wch.properties)+"]");
-    blog("   notify "+ble.nch.uuid+"  (subscribed)");
+    if(!ble.wlist.length || !ble.nlist.length){ blog("Connected, but didn't find both a write and a notify characteristic."); bstate(true,"Connected (no pipe)"); return; }
+    // default to the dedicated Cricut service pair, then the ISSC transparent data chars
+    fillSel("selw", ble.wlist, ["00000101","-8841-"]);
+    fillSel("seln", ble.nlist, ["00000102","-1e4d-"]);
+    ble.wch=ble.wlist[+$("selw").value];
+    await useNotify();
+    blog("Ready. Write="+ble.wch.uuid.slice(0,8)+"… Notify="+ble.nch.uuid.slice(0,8)+"…  (switch pipes with the dropdowns)");
     bstate(true,"Connected");
   }catch(e){ blog("Error: "+(e.message||e)); if(!ble.server||!ble.server.connected) bstate(false,"Not connected"); }
 }
+function fillSel(id,chars,prefer){ const s=$(id); s.innerHTML=""; chars.forEach((c,i)=>{ const o=document.createElement("option"); o.value=i; o.textContent=c.uuid+"  ["+charTags(c.properties)+"]"; s.appendChild(o); }); let idx=0; for(let i=0;i<chars.length;i++){ if(prefer.some(p=>chars[i].uuid.includes(p))){ idx=i; break; } } s.value=String(idx); }
+async function useNotify(){ const c=ble.nlist[+$("seln").value]; if(ble.nch && ble.nch!==c){ try{ await ble.nch.stopNotifications(); ble.nch.removeEventListener("characteristicvaluechanged",ble.nh); }catch(e){} } ble.nch=c; ble.nh=e=>blog("◀ RX  "+hex(e.target.value.buffer)); await c.startNotifications(); c.addEventListener("characteristicvaluechanged",ble.nh); blog("Subscribed notify "+c.uuid); }
 async function bsend(){
   if(!ble.wch){ blog("No write characteristic."); return; }
   const data=parseHex($("btx").value); if(!data.length){ blog("Nothing to send."); return; }
@@ -341,6 +340,8 @@ async function bsend(){
 $("bconn").onclick=bconnect;
 $("bdisc").onclick=()=>{ try{ ble.dev&&ble.dev.gatt.connected&&ble.dev.gatt.disconnect(); }catch(e){} ble.wch=ble.nch=ble.svc=null; bstate(false,"Not connected"); };
 $("bsend").onclick=bsend;
+$("selw").onchange=()=>{ ble.wch=ble.wlist[+$("selw").value]; blog("Write → "+ble.wch.uuid); };
+$("seln").onchange=()=>useNotify();
 if(!("bluetooth" in navigator)) $("bstat").textContent="Web Bluetooth N/A here";
 
 // start with the example loaded so there's something to see
